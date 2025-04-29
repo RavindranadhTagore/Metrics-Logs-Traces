@@ -1,37 +1,31 @@
-from flask import Flask
-import time, logging
-from prometheus_client import Counter, generate_latest
-from jaeger_client import Config
-from opentracing_instrumentation.client_hooks import install_all_patches
+from fastapi import FastAPI, Request
+import logging
+import time
+import random
+from prometheus_client import start_http_server, Summary, Counter
+from prometheus_client import generate_latest
 
-app = Flask(__name__)
-install_all_patches()
+app = FastAPI()
+logging.basicConfig(filename='app.log', level=logging.INFO)
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+REQUEST_TIME = Summary('request_processing_seconds', 'Time spent processing request')
+REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests')
 
-# Metrics
-REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP Requests')
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    log = f"{request.method} {request.url.path} completed_in={process_time:.4f}s"
+    logging.info(log)
+    return response
 
-# Tracing
-def init_tracer(service):
-    config = Config(config={'sampler': {'type': 'const', 'param': 1},
-                            'logging': True}, service_name=service)
-    return config.initialize_tracer()
-
-tracer = init_tracer('demo-app')
-
-@app.route("/")
-def hello():
+@app.get("/hello")
+@REQUEST_TIME.time()
+def read_root():
     REQUEST_COUNT.inc()
-    with tracer.start_span('hello-span'):
-        logging.info("Hit / endpoint")
-        time.sleep(0.5)
-        return "Hello, Observability!"
+    return {"message": "Hello from observability app"}
 
-@app.route("/metrics")
+@app.get("/metrics")
 def metrics():
     return generate_latest()
-
-if __name__ == "__main__":
-    app.run(host='0.0.0.0')
